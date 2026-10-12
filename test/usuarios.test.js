@@ -1,163 +1,200 @@
-// Iteración 1: usuarios y autenticación. Cada nombre de test cita el criterio de docs/01-usuarios-y-auth/SPEC.md.
-const { test } = require('node:test');
+// Pruebas de la iteración 1 (usuarios y autenticación).
+// El número de cada prueba es el de la lista de criterios de docs/01-usuarios-y-auth/SPEC.md.
+const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const os = require('node:os');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 const { crearApp } = require('../src/app');
 const { abrirBD } = require('../src/db');
 
-const nuevo = () => {
-  const bd = abrirBD(':memory:');
-  return { bd, api: request(crearApp({ bd, adminEmail: 'admin@casino.es' })) };
-};
-const DATOS = { email: 'ana@correo.es', nombre: 'Ana', password: 'secreta1' };
+const ana = { email: 'ana@correo.es', nombre: 'Ana', password: 'secreta1' };
 
-async function registrarYEntrar(api, datos = DATOS) {
-  await api.post('/auth/register').send(datos);
-  const r = await api.post('/auth/login').send({ email: datos.email, password: datos.password });
-  return r.body.token;
+// Cada prueba usa una app nueva con la base de datos en memoria.
+function nuevaApp() {
+  return request(crearApp({ bd: abrirBD(':memory:'), adminEmail: 'admin@casino.es' }));
 }
 
-test('[CA1.1] registro válido → 201, perfil con rol jugador y saldo 100, sin contraseña', async () => {
-  const { api } = nuevo();
-  const r = await api.post('/auth/register').send(DATOS);
-  assert.equal(r.status, 201);
-  assert.equal(r.body.email, 'ana@correo.es');
-  assert.equal(r.body.rol, 'jugador');
-  assert.equal(r.body.saldo, 100);
-  assert.ok(r.body.id);
-  assert.equal(r.body.password, undefined);
-  assert.equal(r.body.password_hash, undefined);
-});
+function conToken(token) {
+  return 'Bearer ' + token;
+}
 
-test('[CA1.2] registro con datos inválidos → 400', async () => {
-  const { api } = nuevo();
-  const malos = [
-    { ...DATOS, email: 'sin-arroba' },
-    { ...DATOS, nombre: '   ' },
-    { ...DATOS, password: '123' },
-    { email: DATOS.email },
-  ];
-  for (const cuerpo of malos) {
-    const r = await api.post('/auth/register').send(cuerpo);
-    assert.equal(r.status, 400, JSON.stringify(cuerpo));
-  }
-  const json = await api.post('/auth/register').set('Content-Type', 'application/json').send('{no es json');
-  assert.equal(json.status, 400);
-});
+// Registra a Ana, hace login y devuelve su token.
+async function registrarYEntrar(api) {
+  await api.post('/auth/register').send(ana);
+  const login = await api.post('/auth/login').send({ email: ana.email, password: ana.password });
+  return login.body.token;
+}
 
-test('[CA1.3] registro con email repetido (aunque cambien las mayúsculas) → 409', async () => {
-  const { api } = nuevo();
-  await api.post('/auth/register').send(DATOS);
-  const r = await api.post('/auth/register').send({ ...DATOS, email: 'ANA@correo.es' });
-  assert.equal(r.status, 409);
-});
+describe('Iteración 1: usuarios y autenticación', () => {
+  it('criterio 1: registro válido devuelve 201 con el perfil (rol jugador, saldo 100) y sin contraseña', async () => {
+    const api = nuevaApp();
+    const res = await api.post('/auth/register').send(ana);
 
-test('[CA1.4] la contraseña se guarda como hash bcrypt, no en claro', async () => {
-  const { api, bd } = nuevo();
-  await api.post('/auth/register').send(DATOS);
-  const { password_hash } = bd.prepare('SELECT password_hash FROM usuarios').get();
-  assert.notEqual(password_hash, DATOS.password);
-  assert.match(password_hash, /^\$2[aby]\$/);
-});
+    assert.equal(res.status, 201);
+    assert.equal(res.body.email, 'ana@correo.es');
+    assert.equal(res.body.nombre, 'Ana');
+    assert.equal(res.body.rol, 'jugador');
+    assert.equal(res.body.saldo, 100);
+    assert.ok(res.body.id);
+    assert.equal(res.body.password, undefined);
+    assert.equal(res.body.password_hash, undefined);
+  });
 
-test('[CA1.5] login correcto → 200 con un token JWT firmado por el servidor', async () => {
-  const { api } = nuevo();
-  await api.post('/auth/register').send(DATOS);
-  const r = await api.post('/auth/login').send({ email: DATOS.email, password: DATOS.password });
-  assert.equal(r.status, 200);
-  assert.equal(r.body.token.split('.').length, 3);
-  assert.ok(jwt.decode(r.body.token).sub);
-});
+  it('criterio 2: registro con datos inválidos devuelve 400', async () => {
+    const api = nuevaApp();
+    const casosMalos = [
+      { ...ana, email: 'sin-arroba' },
+      { ...ana, nombre: '   ' },
+      { ...ana, password: '123' },
+      { email: ana.email },
+    ];
+    for (const caso of casosMalos) {
+      const res = await api.post('/auth/register').send(caso);
+      assert.equal(res.status, 400);
+    }
 
-test('[CA1.6] login con contraseña mala o email inexistente → 401 con el mismo mensaje', async () => {
-  const { api } = nuevo();
-  await api.post('/auth/register').send(DATOS);
-  const a = await api.post('/auth/login').send({ email: DATOS.email, password: 'otra-clave' });
-  const b = await api.post('/auth/login').send({ email: 'nadie@correo.es', password: 'secreta1' });
-  assert.equal(a.status, 401);
-  assert.equal(b.status, 401);
-  assert.equal(a.body.error, b.body.error);
-});
+    const jsonRoto = await api.post('/auth/register').set('Content-Type', 'application/json').send('{esto no es json');
+    assert.equal(jsonRoto.status, 400);
+  });
 
-test('[CA1.7] GET /usuarios/me con token → 200 con mi perfil', async () => {
-  const { api } = nuevo();
-  const token = await registrarYEntrar(api);
-  const r = await api.get('/usuarios/me').set('Authorization', `Bearer ${token}`);
-  assert.equal(r.status, 200);
-  assert.equal(r.body.email, DATOS.email);
-  assert.equal(r.body.saldo, 100);
-});
+  it('criterio 3: registro con un email repetido devuelve 409 (aunque cambien las mayúsculas)', async () => {
+    const api = nuevaApp();
+    await api.post('/auth/register').send(ana);
 
-test('[CA1.8] sin token, token mal formado o con firma falsa → 401', async () => {
-  const { api } = nuevo();
-  await registrarYEntrar(api);
-  const falso = jwt.sign({ sub: '1' }, 'otro-secreto');
-  assert.equal((await api.get('/usuarios/me')).status, 401);
-  assert.equal((await api.get('/usuarios/me').set('Authorization', 'Bearer basura')).status, 401);
-  assert.equal((await api.get('/usuarios/me').set('Authorization', `Bearer ${falso}`)).status, 401);
-});
+    const res = await api.post('/auth/register').send({ ...ana, email: 'ANA@correo.es' });
+    assert.equal(res.status, 409);
+  });
 
-test('[CA1.9] PATCH /usuarios/me cambia el nombre y queda guardado', async () => {
-  const { api } = nuevo();
-  const token = await registrarYEntrar(api);
-  const r = await api.patch('/usuarios/me').set('Authorization', `Bearer ${token}`).send({ nombre: 'Ana María' });
-  assert.equal(r.status, 200);
-  assert.equal(r.body.nombre, 'Ana María');
-  const otra = await api.get('/usuarios/me').set('Authorization', `Bearer ${token}`);
-  assert.equal(otra.body.nombre, 'Ana María');
-});
+  it('criterio 4: la contraseña se guarda cifrada con bcrypt y no en claro', async () => {
+    const bd = abrirBD(':memory:');
+    const api = request(crearApp({ bd }));
+    await api.post('/auth/register').send(ana);
 
-test('[CA1.10] PATCH con password nueva: la nueva sirve y la antigua da 401', async () => {
-  const { api } = nuevo();
-  const token = await registrarYEntrar(api);
-  const r = await api.patch('/usuarios/me').set('Authorization', `Bearer ${token}`).send({ password: 'nueva-clave' });
-  assert.equal(r.status, 200);
-  const nueva = await api.post('/auth/login').send({ email: DATOS.email, password: 'nueva-clave' });
-  const vieja = await api.post('/auth/login').send({ email: DATOS.email, password: DATOS.password });
-  assert.equal(nueva.status, 200);
-  assert.equal(vieja.status, 401);
-});
+    const fila = bd.prepare('SELECT password_hash FROM usuarios').get();
+    assert.notEqual(fila.password_hash, ana.password);
+    assert.match(fila.password_hash, /^\$2[aby]\$/);
+  });
 
-test('[CA1.11] PATCH vacío o inválido → 400; rol, saldo y email se ignoran', async () => {
-  const { api } = nuevo();
-  const token = await registrarYEntrar(api);
-  const auth = ['Authorization', `Bearer ${token}`];
-  assert.equal((await api.patch('/usuarios/me').set(...auth).send({})).status, 400);
-  assert.equal((await api.patch('/usuarios/me').set(...auth).send({ nombre: '' })).status, 400);
-  assert.equal((await api.patch('/usuarios/me').set(...auth).send({ password: '12' })).status, 400);
+  it('criterio 5: login correcto devuelve 200 con un token JWT', async () => {
+    const api = nuevaApp();
+    await api.post('/auth/register').send(ana);
 
-  const r = await api.patch('/usuarios/me').set(...auth).send({ nombre: 'Ana', rol: 'admin', saldo: 9999, email: 'x@y.es' });
-  assert.equal(r.status, 200);
-  assert.equal(r.body.rol, 'jugador');
-  assert.equal(r.body.saldo, 100);
-  assert.equal(r.body.email, DATOS.email);
-});
+    const res = await api.post('/auth/login').send({ email: ana.email, password: ana.password });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.token.split('.').length, 3);
+    assert.ok(jwt.decode(res.body.token).sub);
+  });
 
-test('[CA1.12] el email de ADMIN_EMAIL se registra con rol admin', async () => {
-  const { api } = nuevo();
-  const r = await api.post('/auth/register').send({ email: 'admin@casino.es', nombre: 'Jefe', password: 'clave-admin' });
-  assert.equal(r.status, 201);
-  assert.equal(r.body.rol, 'admin');
-});
+  it('criterio 6: login con contraseña incorrecta o email inexistente devuelve 401 con el mismo mensaje', async () => {
+    const api = nuevaApp();
+    await api.post('/auth/register').send(ana);
 
-test('[CA1.13] los datos persisten en un fichero SQLite', async () => {
-  const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), 'honda-'));
-  const fichero = path.join(carpeta, 'prueba.sqlite');
-  try {
-    const bd1 = abrirBD(fichero);
-    await request(crearApp({ bd: bd1 })).post('/auth/register').send(DATOS);
-    bd1.close();
+    const passwordMala = await api.post('/auth/login').send({ email: ana.email, password: 'otra-clave' });
+    const emailInexistente = await api.post('/auth/login').send({ email: 'nadie@correo.es', password: 'secreta1' });
 
-    // "Reinicio del servidor": se abre otra app sobre el mismo fichero.
-    const bd2 = abrirBD(fichero);
-    const r = await request(crearApp({ bd: bd2 })).post('/auth/login').send({ email: DATOS.email, password: DATOS.password });
-    assert.equal(r.status, 200);
-    bd2.close();
-  } finally {
-    fs.rmSync(carpeta, { recursive: true, force: true });
-  }
+    assert.equal(passwordMala.status, 401);
+    assert.equal(emailInexistente.status, 401);
+    assert.equal(passwordMala.body.error, emailInexistente.body.error);
+  });
+
+  it('criterio 7: GET /usuarios/me con token devuelve mi perfil', async () => {
+    const api = nuevaApp();
+    const token = await registrarYEntrar(api);
+
+    const res = await api.get('/usuarios/me').set('Authorization', conToken(token));
+    assert.equal(res.status, 200);
+    assert.equal(res.body.email, ana.email);
+    assert.equal(res.body.saldo, 100);
+  });
+
+  it('criterio 8: sin token, con token mal formado o con firma falsa devuelve 401', async () => {
+    const api = nuevaApp();
+    await registrarYEntrar(api);
+    const tokenFalso = jwt.sign({ sub: '1' }, 'otro-secreto');
+
+    const sinToken = await api.get('/usuarios/me');
+    const tokenBasura = await api.get('/usuarios/me').set('Authorization', 'Bearer basura');
+    const firmaFalsa = await api.get('/usuarios/me').set('Authorization', conToken(tokenFalso));
+
+    assert.equal(sinToken.status, 401);
+    assert.equal(tokenBasura.status, 401);
+    assert.equal(firmaFalsa.status, 401);
+  });
+
+  it('criterio 9: PATCH /usuarios/me cambia el nombre y el cambio queda guardado', async () => {
+    const api = nuevaApp();
+    const token = await registrarYEntrar(api);
+
+    const res = await api.patch('/usuarios/me').set('Authorization', conToken(token)).send({ nombre: 'Ana María' });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.nombre, 'Ana María');
+
+    const perfil = await api.get('/usuarios/me').set('Authorization', conToken(token));
+    assert.equal(perfil.body.nombre, 'Ana María');
+  });
+
+  it('criterio 10: tras cambiar la contraseña, la nueva sirve para el login y la antigua da 401', async () => {
+    const api = nuevaApp();
+    const token = await registrarYEntrar(api);
+
+    const cambio = await api.patch('/usuarios/me').set('Authorization', conToken(token)).send({ password: 'nueva-clave' });
+    assert.equal(cambio.status, 200);
+
+    const loginNueva = await api.post('/auth/login').send({ email: ana.email, password: 'nueva-clave' });
+    const loginVieja = await api.post('/auth/login').send({ email: ana.email, password: ana.password });
+    assert.equal(loginNueva.status, 200);
+    assert.equal(loginVieja.status, 401);
+  });
+
+  it('criterio 11: PATCH vacío o inválido devuelve 400 y rol, saldo y email no se pueden cambiar', async () => {
+    const api = nuevaApp();
+    const token = await registrarYEntrar(api);
+    const cabecera = conToken(token);
+
+    const vacio = await api.patch('/usuarios/me').set('Authorization', cabecera).send({});
+    const nombreVacio = await api.patch('/usuarios/me').set('Authorization', cabecera).send({ nombre: '' });
+    const passwordCorta = await api.patch('/usuarios/me').set('Authorization', cabecera).send({ password: '12' });
+    assert.equal(vacio.status, 400);
+    assert.equal(nombreVacio.status, 400);
+    assert.equal(passwordCorta.status, 400);
+
+    const intento = await api
+      .patch('/usuarios/me')
+      .set('Authorization', cabecera)
+      .send({ nombre: 'Ana', rol: 'admin', saldo: 9999, email: 'otro@correo.es' });
+    assert.equal(intento.status, 200);
+    assert.equal(intento.body.rol, 'jugador');
+    assert.equal(intento.body.saldo, 100);
+    assert.equal(intento.body.email, ana.email);
+  });
+
+  it('criterio 12: el email de administrador se registra con rol admin', async () => {
+    const api = nuevaApp();
+    const res = await api.post('/auth/register').send({ email: 'admin@casino.es', nombre: 'Jefe', password: 'clave-admin' });
+
+    assert.equal(res.status, 201);
+    assert.equal(res.body.rol, 'admin');
+  });
+
+  it('criterio 13: los datos persisten en un fichero SQLite', async () => {
+    const carpeta = fs.mkdtempSync(path.join(os.tmpdir(), 'honda-'));
+    const fichero = path.join(carpeta, 'prueba.sqlite');
+
+    try {
+      const bd1 = abrirBD(fichero);
+      await request(crearApp({ bd: bd1 })).post('/auth/register').send(ana);
+      bd1.close();
+
+      // Se vuelve a abrir el mismo fichero, como si se reiniciara el servidor.
+      const bd2 = abrirBD(fichero);
+      const login = await request(crearApp({ bd: bd2 })).post('/auth/login').send({ email: ana.email, password: ana.password });
+      assert.equal(login.status, 200);
+      bd2.close();
+    } finally {
+      fs.rmSync(carpeta, { recursive: true, force: true });
+    }
+  });
 });

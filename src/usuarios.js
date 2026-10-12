@@ -1,78 +1,106 @@
-// Registro, login y perfil propio. La lógica está dentro de cada ruta a propósito: es corta.
+// Registro, login y perfil del propio usuario.
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { crearToken, autenticar } = require('./auth');
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const perfil = (u) => ({ id: u.id, email: u.email, nombre: u.nombre, rol: u.rol, saldo: u.saldo });
+function emailValido(email) {
+  return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
 
-// Validadores: devuelven un mensaje de error o null si el valor es correcto.
-const errorNombre = (n) => (typeof n === 'string' && n.trim().length >= 1 && n.trim().length <= 50 ? null : 'nombre: entre 1 y 50 caracteres');
-// 72 es el máximo que bcrypt tiene en cuenta.
-const errorPassword = (p) => (typeof p === 'string' && p.length >= 6 && p.length <= 72 ? null : 'password: entre 6 y 72 caracteres');
+function nombreValido(nombre) {
+  return typeof nombre === 'string' && nombre.trim().length >= 1 && nombre.trim().length <= 50;
+}
+
+// bcrypt solo tiene en cuenta los primeros 72 caracteres.
+function passwordValida(password) {
+  return typeof password === 'string' && password.length >= 6 && password.length <= 72;
+}
 
 function rutasUsuarios(bd, adminEmail) {
   const router = express.Router();
 
+  // Devuelve los datos del usuario sin la contraseña.
+  function buscarPerfil(id) {
+    return bd.prepare('SELECT id, email, nombre, rol, saldo FROM usuarios WHERE id = ?').get(id);
+  }
+
   router.post('/auth/register', async (req, res) => {
-    const { email, nombre, password } = req.body ?? {};
-    const error =
-      (typeof email === 'string' && EMAIL.test(email) ? null : 'email: formato no válido') ||
-      errorNombre(nombre) ||
-      errorPassword(password);
-    if (error) return res.status(400).json({ error });
+    const body = req.body || {};
+    if (!emailValido(body.email)) {
+      return res.status(400).json({ error: 'El email no tiene un formato válido' });
+    }
+    if (!nombreValido(body.nombre)) {
+      return res.status(400).json({ error: 'El nombre debe tener entre 1 y 50 caracteres' });
+    }
+    if (!passwordValida(body.password)) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 6 y 72 caracteres' });
+    }
 
-    const emailNormal = email.trim().toLowerCase();
-    // Se calcula el hash ANTES de consultar la base. Después de este await no hay más esperas,
-    // así que "comprobar que no existe" e "insertar" ocurren seguidos y sin que nadie se cuele.
-    const hash = await bcrypt.hash(password, 10);
+    const email = body.email.toLowerCase();
 
-    if (bd.prepare('SELECT 1 FROM usuarios WHERE email = ?').get(emailNormal)) {
+    // El hash se calcula antes de mirar si el email existe. Así, entre comprobar el email
+    // y guardarlo no hay ninguna espera y no se pueden colar dos registros iguales.
+    const hash = await bcrypt.hash(body.password, 10);
+
+    const existe = bd.prepare('SELECT id FROM usuarios WHERE email = ?').get(email);
+    if (existe) {
       return res.status(409).json({ error: 'Ese email ya está registrado' });
     }
-    // El rol nunca viene del cliente: lo decide el servidor.
-    const rol = emailNormal === adminEmail.toLowerCase() ? 'admin' : 'jugador';
-    const r = bd
-      .prepare('INSERT INTO usuarios (email, nombre, password_hash, rol) VALUES (?, ?, ?, ?)')
-      .run(emailNormal, nombre.trim(), hash, rol);
 
-    const usuario = bd.prepare('SELECT id, email, nombre, rol, saldo FROM usuarios WHERE id = ?').get(r.lastInsertRowid);
-    res.status(201).json(perfil(usuario));
+    // El rol lo decide el servidor, nunca el cliente.
+    const rol = email === adminEmail.toLowerCase() ? 'admin' : 'jugador';
+    const resultado = bd
+      .prepare('INSERT INTO usuarios (email, nombre, password_hash, rol) VALUES (?, ?, ?, ?)')
+      .run(email, body.nombre.trim(), hash, rol);
+
+    res.status(201).json(buscarPerfil(resultado.lastInsertRowid));
   });
 
   router.post('/auth/login', async (req, res) => {
-    const { email, password } = req.body ?? {};
-    const usuario =
-      typeof email === 'string' ? bd.prepare('SELECT * FROM usuarios WHERE email = ?').get(email.trim().toLowerCase()) : null;
-    // Mismo mensaje si falla el email o la contraseña: así no se revela qué emails existen.
-    const ok = usuario && typeof password === 'string' && (await bcrypt.compare(password, usuario.password_hash));
-    if (!ok) return res.status(401).json({ error: 'Email o contraseña incorrectos' });
+    const body = req.body || {};
+    const usuario = bd.prepare('SELECT * FROM usuarios WHERE email = ?').get(String(body.email).toLowerCase());
+
+    // Si falla el email o la contraseña se responde igual, para no decir qué emails existen.
+    let correcto = false;
+    if (usuario && typeof body.password === 'string') {
+      correcto = await bcrypt.compare(body.password, usuario.password_hash);
+    }
+    if (!correcto) {
+      return res.status(401).json({ error: 'Email o contraseña incorrectos' });
+    }
 
     res.json({ token: crearToken(usuario) });
   });
 
   router.get('/usuarios/me', autenticar(bd), (req, res) => {
-    res.json(perfil(req.usuario));
+    res.json(buscarPerfil(req.usuario.id));
   });
 
   router.patch('/usuarios/me', autenticar(bd), async (req, res) => {
-    // Solo se leen nombre y password: cualquier otro campo (rol, saldo, email...) se ignora.
-    const { nombre, password } = req.body ?? {};
-    if (nombre === undefined && password === undefined) {
-      return res.status(400).json({ error: 'Envía nombre y/o password' });
-    }
-    const error = (nombre !== undefined && errorNombre(nombre)) || (password !== undefined && errorPassword(password));
-    if (error) return res.status(400).json({ error });
+    // Solo se leen nombre y password. Cualquier otro campo (rol, saldo, email) se ignora.
+    const body = req.body || {};
+    const quiereNombre = body.nombre !== undefined;
+    const quierePassword = body.password !== undefined;
 
-    if (nombre !== undefined) {
-      bd.prepare('UPDATE usuarios SET nombre = ? WHERE id = ?').run(nombre.trim(), req.usuario.id);
+    if (!quiereNombre && !quierePassword) {
+      return res.status(400).json({ error: 'Envía el nombre y/o la contraseña' });
     }
-    if (password !== undefined) {
-      const hash = await bcrypt.hash(password, 10);
+    if (quiereNombre && !nombreValido(body.nombre)) {
+      return res.status(400).json({ error: 'El nombre debe tener entre 1 y 50 caracteres' });
+    }
+    if (quierePassword && !passwordValida(body.password)) {
+      return res.status(400).json({ error: 'La contraseña debe tener entre 6 y 72 caracteres' });
+    }
+
+    if (quiereNombre) {
+      bd.prepare('UPDATE usuarios SET nombre = ? WHERE id = ?').run(body.nombre.trim(), req.usuario.id);
+    }
+    if (quierePassword) {
+      const hash = await bcrypt.hash(body.password, 10);
       bd.prepare('UPDATE usuarios SET password_hash = ? WHERE id = ?').run(hash, req.usuario.id);
     }
-    const usuario = bd.prepare('SELECT id, email, nombre, rol, saldo FROM usuarios WHERE id = ?').get(req.usuario.id);
-    res.json(perfil(usuario));
+
+    res.json(buscarPerfil(req.usuario.id));
   });
 
   return router;

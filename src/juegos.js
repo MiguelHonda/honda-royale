@@ -1,108 +1,139 @@
-// Recurso principal: juegos. Todos los usuarios con sesión pueden verlos; solo el admin los gestiona.
+// Juegos: cualquier usuario con sesión puede verlos, solo el admin puede crearlos, modificarlos y borrarlos.
 const express = require('express');
 const { autenticar, soloAdmin } = require('./auth');
-const { leerPagina, leerId, apuestaJSON } = require('./util');
+const { leerPagina, leerId, formatearApuesta } = require('./util');
 
-// Valida el body. Con completo=true el nombre es obligatorio (crear); si no, solo se valida lo que llegue (modificar).
-// Devuelve { datos } con los campos ya limpios, o { error }.
-function validar(body, completo) {
-  const { nombre, descripcion, apuesta_max } = body ?? {};
-  const datos = {};
+// Comprueba los datos de un juego. "base" son los valores de partida: los de un juego nuevo
+// al crear, o los del juego actual al modificar (lo que no se envía se queda como estaba).
+// Devuelve { juego } con los valores finales o { error } con el motivo.
+function leerJuego(body, base) {
+  const nombre = body.nombre === undefined ? base.nombre : body.nombre;
+  const descripcion = body.descripcion === undefined ? base.descripcion : body.descripcion;
+  const apuestaMax = body.apuesta_max === undefined ? base.apuesta_max : body.apuesta_max;
 
-  if (nombre !== undefined || completo) {
-    if (typeof nombre !== 'string' || nombre.trim().length < 1 || nombre.trim().length > 60) {
-      return { error: 'nombre: entre 1 y 60 caracteres' };
-    }
-    datos.nombre = nombre.trim();
+  if (typeof nombre !== 'string' || nombre.trim().length < 1 || nombre.trim().length > 60) {
+    return { error: 'El nombre debe tener entre 1 y 60 caracteres' };
   }
-  if (descripcion !== undefined) {
-    if (typeof descripcion !== 'string' || descripcion.length > 300) {
-      return { error: 'descripcion: texto de hasta 300 caracteres' };
-    }
-    datos.descripcion = descripcion;
+  if (typeof descripcion !== 'string' || descripcion.length > 300) {
+    return { error: 'La descripción no puede pasar de 300 caracteres' };
   }
-  if (apuesta_max !== undefined) {
-    if (!Number.isInteger(apuesta_max) || apuesta_max < 1 || apuesta_max > 1000000) {
-      return { error: 'apuesta_max: entero entre 1 y 1000000' };
-    }
-    datos.apuesta_max = apuesta_max;
+  if (!Number.isInteger(apuestaMax) || apuestaMax < 1 || apuestaMax > 1000000) {
+    return { error: 'La apuesta máxima debe ser un entero entre 1 y 1000000' };
   }
-  return { datos };
+
+  return { juego: { nombre: nombre.trim(), descripcion, apuesta_max: apuestaMax } };
 }
 
 function rutasJuegos(bd) {
   const router = express.Router();
-  // Todo lo que empieza por /juegos exige sesión (401 si no hay token válido).
+
+  // Todas las rutas de /juegos necesitan estar identificado.
   router.use('/juegos', autenticar(bd));
 
-  const buscar = (id) => bd.prepare('SELECT * FROM juegos WHERE id = ?').get(id);
+  function buscarJuego(id) {
+    return bd.prepare('SELECT * FROM juegos WHERE id = ?').get(id);
+  }
 
-  // Listado: búsqueda por texto + paginación.
+  // Listado con búsqueda (?q=) y paginación (?pagina= y ?limite=).
   router.get('/juegos', (req, res) => {
     const pag = leerPagina(req.query);
-    if (!pag) return res.status(400).json({ error: 'pagina y limite deben ser enteros positivos (limite máx. 50)' });
+    if (!pag) {
+      return res.status(400).json({ error: 'pagina y limite deben ser enteros positivos (limite máximo 50)' });
+    }
 
+    let donde = '';
+    const valores = [];
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
-    // instr() busca el texto tal cual (sin comodines) y lower() ignora mayúsculas.
-    const filtro = q ? 'WHERE instr(lower(nombre), lower(?)) > 0 OR instr(lower(descripcion), lower(?)) > 0' : '';
-    const params = q ? [q, q] : [];
+    if (q) {
+      // instr busca el texto tal cual (un % no hace de comodín) y lower ignora las mayúsculas.
+      donde = 'WHERE instr(lower(nombre), lower(?)) > 0 OR instr(lower(descripcion), lower(?)) > 0';
+      valores.push(q, q);
+    }
 
-    const total = bd.prepare(`SELECT COUNT(*) AS n FROM juegos ${filtro}`).get(...params).n;
+    const total = bd.prepare(`SELECT COUNT(*) AS n FROM juegos ${donde}`).get(...valores).n;
     const datos = bd
-      .prepare(`SELECT * FROM juegos ${filtro} ORDER BY id LIMIT ? OFFSET ?`)
-      .all(...params, pag.limite, pag.desplazamiento);
+      .prepare(`SELECT * FROM juegos ${donde} ORDER BY id LIMIT ? OFFSET ?`)
+      .all(...valores, pag.limite, pag.saltar);
 
     res.json({ datos, pagina: pag.pagina, limite: pag.limite, total });
   });
 
   router.get('/juegos/:id', (req, res) => {
-    const juego = buscar(leerId(req.params.id));
-    if (!juego) return res.status(404).json({ error: 'Juego no encontrado' });
-    // Recurso relacionado: mis 5 últimas apuestas en este juego (nunca las de otros jugadores).
+    const juego = buscarJuego(leerId(req.params.id));
+    if (!juego) {
+      return res.status(404).json({ error: 'Juego no encontrado' });
+    }
+
+    // Mis 5 últimas apuestas en este juego.
     const ultimas = bd
       .prepare('SELECT * FROM apuestas WHERE juego_id = ? AND usuario_id = ? ORDER BY id DESC LIMIT 5')
       .all(juego.id, req.usuario.id);
-    res.json({ ...juego, ultimasApuestas: ultimas.map(apuestaJSON) });
+
+    res.json({ ...juego, ultimasApuestas: ultimas.map(formatearApuesta) });
   });
 
   router.post('/juegos', soloAdmin, (req, res) => {
-    const { datos, error } = validar(req.body, true);
-    if (error) return res.status(400).json({ error });
+    const valoresIniciales = { nombre: undefined, descripcion: '', apuesta_max: 100 };
+    const { juego, error } = leerJuego(req.body || {}, valoresIniciales);
+    if (error) {
+      return res.status(400).json({ error });
+    }
 
-    if (bd.prepare('SELECT 1 FROM juegos WHERE nombre = ?').get(datos.nombre)) {
+    const repetido = bd.prepare('SELECT id FROM juegos WHERE nombre = ?').get(juego.nombre);
+    if (repetido) {
       return res.status(409).json({ error: 'Ya existe un juego con ese nombre' });
     }
-    const r = bd
+
+    const resultado = bd
       .prepare('INSERT INTO juegos (nombre, descripcion, apuesta_max) VALUES (?, ?, ?)')
-      .run(datos.nombre, datos.descripcion ?? '', datos.apuesta_max ?? 100);
-    res.status(201).json(buscar(r.lastInsertRowid));
+      .run(juego.nombre, juego.descripcion, juego.apuesta_max);
+
+    res.status(201).json(buscarJuego(resultado.lastInsertRowid));
   });
 
   router.patch('/juegos/:id', soloAdmin, (req, res) => {
-    const juego = buscar(leerId(req.params.id));
-    if (!juego) return res.status(404).json({ error: 'Juego no encontrado' });
+    const actual = buscarJuego(leerId(req.params.id));
+    if (!actual) {
+      return res.status(404).json({ error: 'Juego no encontrado' });
+    }
 
-    const { datos, error } = validar(req.body, false);
-    if (error) return res.status(400).json({ error });
-    const columnas = Object.keys(datos);
-    if (columnas.length === 0) return res.status(400).json({ error: 'No hay nada que modificar' });
+    const body = req.body || {};
+    if (body.nombre === undefined && body.descripcion === undefined && body.apuesta_max === undefined) {
+      return res.status(400).json({ error: 'No hay nada que modificar' });
+    }
 
-    if (datos.nombre && bd.prepare('SELECT 1 FROM juegos WHERE nombre = ? AND id != ?').get(datos.nombre, juego.id)) {
+    const { juego, error } = leerJuego(body, actual);
+    if (error) {
+      return res.status(400).json({ error });
+    }
+
+    const repetido = bd.prepare('SELECT id FROM juegos WHERE nombre = ? AND id != ?').get(juego.nombre, actual.id);
+    if (repetido) {
       return res.status(409).json({ error: 'Ya existe un juego con ese nombre' });
     }
-    // Los nombres de columna salen de validar() (lista fija), nunca directamente del cliente.
-    const set = columnas.map((c) => `${c} = ?`).join(', ');
-    bd.prepare(`UPDATE juegos SET ${set} WHERE id = ?`).run(...columnas.map((c) => datos[c]), juego.id);
-    res.json(buscar(juego.id));
+
+    bd.prepare('UPDATE juegos SET nombre = ?, descripcion = ?, apuesta_max = ? WHERE id = ?').run(
+      juego.nombre,
+      juego.descripcion,
+      juego.apuesta_max,
+      actual.id
+    );
+
+    res.json(buscarJuego(actual.id));
   });
 
   router.delete('/juegos/:id', soloAdmin, (req, res) => {
-    const juego = buscar(leerId(req.params.id));
-    if (!juego) return res.status(404).json({ error: 'Juego no encontrado' });
-    // Si alguien ya apostó, se conserva el juego para no perder su historial.
-    if (bd.prepare('SELECT 1 FROM apuestas WHERE juego_id = ?').get(juego.id)) {
+    const juego = buscarJuego(leerId(req.params.id));
+    if (!juego) {
+      return res.status(404).json({ error: 'Juego no encontrado' });
+    }
+
+    // Si ya hay apuestas no se borra, para no perder el historial de los jugadores.
+    const conApuestas = bd.prepare('SELECT id FROM apuestas WHERE juego_id = ?').get(juego.id);
+    if (conApuestas) {
       return res.status(409).json({ error: 'El juego tiene apuestas y no se puede borrar' });
     }
+
     bd.prepare('DELETE FROM juegos WHERE id = ?').run(juego.id);
     res.status(204).end();
   });
