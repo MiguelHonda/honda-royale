@@ -1,32 +1,30 @@
 # Honda Royale mínimo · Explicación
 
-Este es el backend de un casino con saldo virtual (no hay dinero real). Solo es la API, no tiene pantallas. Con él se puede registrar gente, hacer login, ver los juegos y apostar a cara o cruz. Todo se guarda en una base de datos SQLite.
+Backend (solo API, sin pantallas) de un casino con saldo virtual. Se pueden registrar usuarios, hacer login,
+ver juegos y apostar a cara o cruz. Todo se guarda en una base de datos SQLite.
 
-La práctica pide solo lo mínimo, así que dejé fuera a propósito el ranking, los movimientos, el regalo de saldo, el resto de juegos y el frontend.
-
-## 1. Cómo se ejecuta
+## 1. Cómo ejecutarlo
 
 ```bash
 npm install
-npm test        # 38 pruebas, no hace falta configurar nada
-npm start       # http://localhost:3000 (la primera vez crea datos.sqlite)
+npm test        # 38 pruebas, no necesita configuración
+npm start       # http://localhost:3000 (crea el fichero datos.sqlite la primera vez)
 ```
 
-Variables opcionales: `PORT` (3000), `JWT_SECRET` (el secreto con el que se firman los tokens), `ADMIN_EMAIL` (por defecto `admin@casino.es`) y `BD_RUTA` (por defecto `datos.sqlite`).
+Variables opcionales: `PORT` (3000), `JWT_SECRET` (secreto del token), `ADMIN_EMAIL` (por defecto `admin@casino.es`) y `BD_RUTA` (por defecto `datos.sqlite`).
 
-Para probarlo a mano con curl:
+Ejemplo a mano con `curl`:
 
 ```bash
 # 1. Registrarse (el email admin@casino.es se registra como administrador)
 curl -X POST localhost:3000/auth/register -H 'Content-Type: application/json' \
      -d '{"email":"admin@casino.es","nombre":"Jefe","password":"clave-123"}'
 
-# 2. Login: devuelve {"token":"..."}; lo guardo en una variable
+# 2. Login: devuelve {"token":"..."}
 curl -X POST localhost:3000/auth/login -H 'Content-Type: application/json' \
      -d '{"email":"admin@casino.es","password":"clave-123"}'
-TOKEN=pega-aquí-el-token
 
-# 3. Con el token ya puedo usar el resto
+# 3. Usar el token en el resto de peticiones
 curl -X POST localhost:3000/juegos -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
      -d '{"nombre":"Mesa 1","apuesta_max":50}'
 curl -X POST localhost:3000/juegos/1/apuestas -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
@@ -35,109 +33,131 @@ curl -X POST localhost:3000/juegos/1/apuestas -H 'Content-Type: application/json
 
 ## 2. Qué hace cada archivo
 
-- `src/server.js`: arranca el servidor en un puerto. Son tres líneas.
-- `src/app.js`: crea la aplicación de Express. Activa la lectura de JSON, monta las rutas de cada tema y dice qué responder cuando algo falla (404 y 500). No abre el puerto, y por eso las pruebas pueden usar la app directamente sin arrancar el servidor.
-- `src/db.js`: abre la base SQLite y crea las tres tablas (`usuarios`, `juegos` y `apuestas`) si todavía no existen.
-- `src/auth.js`: todo lo del JWT. `crearToken` se usa en el login, `autenticar` comprueba el token en cada petición protegida y `soloAdmin` exige que el usuario sea admin.
-- `src/util.js`: tres funciones pequeñas. Una lee `?pagina=` y `?limite=`, otra convierte el `:id` de la URL en número y otra pasa `ganada` de 0/1 a true/false.
-- `src/usuarios.js`: las rutas `/auth/register`, `/auth/login` y `/usuarios/me`, con su lógica dentro.
-- `src/juegos.js`: las rutas de `/juegos`. Listar con búsqueda y paginación, ver uno, crear, modificar y borrar.
-- `src/apuestas.js`: las rutas de `/juegos/:id/apuestas`. Apostar, listar mis apuestas y borrar una.
-- `test/`: un archivo de pruebas por iteración. Cada prueba comprueba un criterio de la SPEC.
-- `docs/`: la documentación SDD. Por cada iteración hay un `SPEC.md` (qué tiene que hacer), un `PLAN.md` (cómo lo voy a hacer) y un `RESULTADOS.md` (lo que salió al ejecutar `npm test`).
+| Archivo | Qué hace |
+|---|---|
+| `src/server.js` | Arranca el servidor en un puerto. |
+| `src/app.js` | Crea la app Express, activa la lectura de JSON, conecta las rutas y define qué responder en los errores (404 y 500). No abre el puerto, así las pruebas pueden usarla directamente. |
+| `src/db.js` | Abre la base SQLite y crea las tablas `usuarios`, `juegos` y `apuestas` si no existen. |
+| `src/auth.js` | Todo lo del JWT: `crearToken` (en el login), `autenticar` (comprueba el token en cada petición protegida) y `soloAdmin` (exige rol admin). |
+| `src/util.js` | Funciones pequeñas: leer `?pagina=` y `?limite=`, convertir el `:id` de la URL en número y pasar `ganada` de 0/1 a true/false. |
+| `src/usuarios.js` | Rutas `/auth/register`, `/auth/login` y `/usuarios/me`. |
+| `src/juegos.js` | Rutas `/juegos`: listar con búsqueda y paginación, ver uno, crear, modificar y borrar. |
+| `src/apuestas.js` | Rutas `/juegos/:id/apuestas`: apostar, listar mis apuestas y borrar una. |
+| `test/*.test.js` | Un archivo de pruebas por iteración. |
+| `docs/` | Documentación SDD: `SPEC.md`, `PLAN.md` y `RESULTADOS.md` de cada iteración. |
 
-Hice tres iteraciones en este orden porque cada una necesita a la anterior. Primero los usuarios, porque todo lo demás necesita saber quién eres. Después los juegos, que son el recurso principal. Y por último las apuestas, que son el recurso secundario y dependen de usuarios y de juegos.
+## 3. El recorrido de una petición
 
-## 3. Qué pasa cuando llega una petición
+Ejemplo: `POST /juegos/1/apuestas` con el body `{"importe": 10, "eleccion": "cara"}` y la cabecera `Authorization: Bearer <token>`.
 
-Voy a seguir como ejemplo `POST /juegos/1/apuestas`, con el body `{"importe": 10, "eleccion": "cara"}` y la cabecera `Authorization: Bearer <token>`.
+```text
+Cliente (curl o supertest)
+   │  petición HTTP
+   ▼
+app.js ── express.json() convierte el body en un objeto (req.body)
+   │
+   ▼
+apuestas.js ── autenticar(bd)                                  1. ¿Quién eres?
+   │            auth.js lee el token, comprueba la firma y carga al usuario en req.usuario
+   ▼
+apuestas.js ── router.post('/juegos/:id/apuestas', ...)        2. La lógica
+   │   a) busca el juego en la base             → si no existe: 404
+   │   b) comprueba importe y elección          → si están mal: 400
+   │   c) lee el saldo del usuario              → si importe > saldo: 409
+   │   d) lanza la moneda (azar)
+   │   e) BEGIN, guarda la apuesta, actualiza el saldo, COMMIT
+   ▼
+db.js (SQLite) ── tablas apuestas y usuarios                   3. Los datos
+   │
+   ▼
+res.status(201).json(...)  → respuesta al cliente
+```
 
-1. La petición llega a `app.js`, donde `express.json()` convierte el body en un objeto de JavaScript (`req.body`).
-2. Antes de ejecutar la lógica, pasa por `autenticar` (`auth.js`). Este lee el token, comprueba la firma y carga al usuario en `req.usuario`. Si algo falla, responde 401 y ahí se acaba.
-3. Ya en `apuestas.js` se hace la lógica:
-   - busca el juego en la base de datos y, si no existe, responde 404;
-   - valida el importe y la elección y, si están mal, responde 400;
-   - mira el saldo del usuario y, si el importe es mayor, responde 409;
-   - lanza la moneda con `azar()`, así que el resultado lo decide el servidor;
-   - guarda la apuesta y actualiza el saldo dentro de una transacción (`BEGIN`, `INSERT`, `UPDATE`, `COMMIT`).
-4. Se responde con 201 y los datos de la apuesta.
-
-No separé el código en capas: la ruta recibe la petición, valida, aplica la regla y habla con SQLite en la misma función. Para un proyecto tan pequeño me pareció más fácil de seguir.
+No hay capas separadas: la ruta recibe la petición, comprueba los datos, aplica la regla y habla con SQLite en la misma función.
 
 Los errores siguen siempre este orden: 401 (no sé quién eres), 403 (no tienes permiso), 404 (no existe), 400 (datos mal) y 409 (choca con el estado actual, por ejemplo saldo insuficiente).
 
 ## 4. Cómo funciona el JWT
 
-Un JWT es un texto con tres partes separadas por puntos: cabecera, contenido y firma. El contenido va codificado, no cifrado, así que cualquiera puede leerlo. Lo que nadie puede hacer es cambiarlo sin que la firma deje de valer.
+Un JWT es un texto con tres partes separadas por puntos: `cabecera.contenido.firma`. El contenido va codificado, no cifrado:
+cualquiera puede leerlo, pero nadie puede cambiarlo sin que la firma deje de ser válida.
 
-- **Quién lo crea:** el servidor, en `POST /auth/login`, con `crearToken` (`src/auth.js`) y `jwt.sign`. Solo lo hace si el email existe y la contraseña coincide con el hash de bcrypt.
-- **Qué lleva dentro:** el id del usuario (`sub`) y la fecha de caducidad, que es de 1 hora. No lleva contraseña, ni rol, ni saldo.
-- **Con qué se firma:** con `JWT_SECRET`, que solo conoce el servidor.
-- **Dónde se envía:** el cliente lo manda en cada petición protegida, en la cabecera `Authorization: Bearer <token>`.
-- **Cómo se comprueba:** `autenticar` separa `Bearer` del token y llama a `jwt.verify`, que revisa la firma y la caducidad. Después busca al usuario por su id en la base de datos. Si falta el token, está mal firmado, ha caducado o el usuario ya no existe, responde 401.
-- **Los permisos:** después de `autenticar`, el rol se saca de la base de datos (`req.usuario.rol`). `soloAdmin` responde 403 si no es admin.
+| Pregunta | Respuesta |
+|---|---|
+| ¿Quién lo crea? | El servidor, en `POST /auth/login`, con `crearToken` (`src/auth.js`). Solo lo hace si el email existe y la contraseña coincide con el hash guardado. |
+| ¿Qué lleva? | El id del usuario y la fecha de caducidad (1 hora). No lleva contraseña, rol ni saldo. |
+| ¿Con qué se firma? | Con `JWT_SECRET`, que solo conoce el servidor. |
+| ¿Dónde se envía? | El cliente lo manda en cada petición protegida en la cabecera `Authorization: Bearer <token>`. |
+| ¿Cómo se comprueba? | `autenticar` (`src/auth.js`) separa `Bearer` del token, llama a `jwt.verify` (revisa firma y caducidad) y busca al usuario por su id en la base. Si falta el token, la firma no es buena, ha caducado o el usuario no existe, responde 401. |
+| ¿Y los permisos? | Después de `autenticar`, `req.usuario.rol` viene de la base de datos. `soloAdmin` responde 403 si no es `admin`. |
 
-El usuario se vuelve a leer de la base de datos en cada petición para que el rol y el saldo sean siempre los de ahora. Así un token no puede darte un rol que no tienes.
+La contraseña no va en el token ni se guarda en claro: se guarda el hash de `bcryptjs`, y en el login `bcrypt.compare` la verifica contra ese hash.
 
-Las contraseñas no van en el token ni se guardan en claro. Se guarda el hash de `bcryptjs`, y en el login `bcrypt.compare` comprueba la contraseña contra ese hash.
+## 5. Qué prueba cada test
 
-## 5. Qué comprueba cada prueba
+Cada prueba empieza por "criterio N", que es el número de la lista de criterios del `SPEC.md` de su iteración.
+Cada prueba crea su propia base de datos en memoria, así que no se afectan entre sí.
 
-El nombre de cada prueba empieza por el criterio de la SPEC al que corresponde (por ejemplo `[CA1.5]`). Cada prueba crea su propia base de datos en memoria, así que no se afectan entre sí.
+### `test/usuarios.test.js` (iteración 1)
 
-### Usuarios (`test/usuarios.test.js`)
+| Criterio | Qué comprueba |
+|---|---|
+| 1 | Registrarse devuelve 201 con rol `jugador`, saldo 100 y sin contraseña en la respuesta. |
+| 2 | Email sin formato, nombre vacío, contraseña corta, campos que faltan y JSON roto devuelven 400. |
+| 3 | Registrar dos veces el mismo email (aunque cambien las mayúsculas) devuelve 409. |
+| 4 | En la base se guarda un hash que empieza por `$2` y no la contraseña. |
+| 5 | El login devuelve un token con 3 partes y el id del usuario dentro. |
+| 6 | Contraseña mala o email inexistente devuelven 401 con el mismo mensaje. |
+| 7 | `GET /usuarios/me` con token devuelve mi perfil. |
+| 8 | Sin token, con un token cualquiera o firmado con otro secreto devuelve 401. |
+| 9 | `PATCH` cambia el nombre y se mantiene al volver a pedir el perfil. |
+| 10 | Tras cambiar la contraseña, la nueva entra y la antigua da 401. |
+| 11 | `PATCH` vacío o inválido devuelve 400, y enviar `rol`, `saldo` o `email` no cambia nada. |
+| 12 | El email `admin@casino.es` se registra con rol `admin`. |
+| 13 | Con un fichero SQLite real, el usuario sigue existiendo al volver a abrir la base. |
 
-- **CA1.1:** registrarse devuelve 201 con rol `jugador` y saldo 100, y la respuesta no trae la contraseña.
-- **CA1.2:** email sin formato, nombre vacío, contraseña corta, campos que faltan o JSON roto dan 400.
-- **CA1.3:** registrar dos veces el mismo email, aunque cambien las mayúsculas, da 409.
-- **CA1.4:** en la base de datos se guarda un hash que empieza por `$2` y no la contraseña.
-- **CA1.5:** el login devuelve un token de tres partes con el id del usuario dentro.
-- **CA1.6:** contraseña mala o email que no existe da 401 con el mismo mensaje.
-- **CA1.7:** `GET /usuarios/me` con token devuelve mi perfil.
-- **CA1.8:** sin token, con un token cualquiera o firmado con otro secreto da 401.
-- **CA1.9:** `PATCH` cambia el nombre y se mantiene al volver a pedir el perfil.
-- **CA1.10:** tras cambiar la contraseña entra la nueva y la antigua da 401.
-- **CA1.11:** `PATCH` vacío o inválido da 400, y mandar `rol`, `saldo` o `email` no cambia nada.
-- **CA1.12:** el email `admin@casino.es` se registra con rol `admin`.
-- **CA1.13:** con un fichero SQLite real, el usuario sigue existiendo al abrir otra app sobre el mismo fichero (los datos persisten).
+### `test/juegos.test.js` (iteración 2)
 
-### Juegos (`test/juegos.test.js`)
+| Criterio | Qué comprueba |
+|---|---|
+| 1 | El admin crea un juego (201) y la apuesta máxima por defecto es 100. |
+| 2 | Un jugador corriente recibe 403 al crear, modificar o borrar. |
+| 3 | Sin token, todas las rutas de juegos devuelven 401. |
+| 4 | Nombre vacío o `apuesta_max` que no es un entero positivo devuelven 400. |
+| 5 | Nombre repetido al crear o al modificar devuelve 409 (dejarle su propio nombre no es conflicto). |
+| 6 | `GET /juegos/:id` devuelve el juego con `ultimasApuestas`. |
+| 7 | Id inexistente o no numérico devuelve 404 en GET, PATCH y DELETE. |
+| 8 | El listado pagina bien: 10 por página, la página 2 con los que quedan, `limite` propio y `total`. |
+| 9 | `?q=` busca en nombre y descripción sin distinguir mayúsculas, y un `%` se busca como texto. |
+| 10 | `pagina=0`, negativa, texto, `limite=0` o `limite=51` devuelven 400. |
+| 11 | `PATCH` solo cambia lo enviado; vacío o inválido devuelve 400. |
+| 12 | El admin borra (204) y después el juego da 404. |
 
-- **CA2.1:** el admin crea un juego (201) y la apuesta máxima por defecto es 100.
-- **CA2.2:** un jugador normal recibe 403 al crear, modificar o borrar.
-- **CA2.3:** sin token, todas las rutas de juegos dan 401.
-- **CA2.4:** nombre vacío, o `apuesta_max` que no sea un entero positivo, da 400.
-- **CA2.5:** nombre repetido al crear o al modificar da 409 (dejar el mismo nombre al modificar no cuenta como repetido).
-- **CA2.6:** `GET /juegos/:id` devuelve el juego con `ultimasApuestas`.
-- **CA2.7:** id que no existe o no numérico da 404 en GET, PATCH y DELETE.
-- **CA2.8:** el listado pagina bien: 10 por página, la página 2 con el resto, un `limite` personalizado y el `total`.
-- **CA2.9:** `?q=` busca en nombre y descripción sin distinguir mayúsculas, y un `%` se busca como texto normal.
-- **CA2.10:** `pagina=0`, negativa o texto, y `limite=0` o `limite=51`, dan 400.
-- **CA2.11:** `PATCH` parcial cambia solo lo que se manda; si va vacío o inválido da 400.
-- **CA2.12:** el admin borra (204) y después el juego da 404.
-
-### Apuestas (`test/apuestas.test.js`)
+### `test/apuestas.test.js` (iteración 3)
 
 En estas pruebas el azar está controlado: con `0.1` sale cara y con `0.9` sale cruz.
 
-- **CA3.1:** una apuesta válida devuelve 201 con el resultado, `ganada` y el saldo nuevo.
-- **CA3.2:** si acierto, el saldo sube el importe.
-- **CA3.3:** si fallo, el saldo baja el importe.
-- **CA3.4:** mandar `resultado`, `ganada` o `saldo` en el body no sirve de nada.
-- **CA3.5:** apostar más de lo que tengo da 409, el saldo no cambia y no queda ninguna apuesta guardada.
-- **CA3.6:** si pierdo todo, el saldo queda en 0 (nunca negativo) y la siguiente apuesta da 409.
-- **CA3.7:** importe 0, negativo, con decimales o texto, una elección inválida o pasarse de `apuesta_max` da 400.
-- **CA3.8:** juego que no existe da 404, y sin token da 401 al apostar, listar y borrar.
-- **CA3.9:** el listado solo trae mis apuestas, con la más reciente primero y paginadas.
-- **CA3.10:** `GET /juegos/:id` trae solo mis 5 últimas apuestas de ese juego, en orden.
-- **CA3.11:** borrar una apuesta mía da 204, desaparece y el saldo queda igual.
-- **CA3.12:** la apuesta de otro jugador no se puede borrar (404) y sigue existiendo.
-- **CA3.13:** un juego que ya tiene apuestas no se puede borrar (409).
+| Criterio | Qué comprueba |
+|---|---|
+| 1 | Una apuesta válida devuelve 201 con resultado, `ganada` y saldo nuevo. |
+| 2 | Acertar suma el importe al saldo. |
+| 3 | Fallar resta el importe del saldo. |
+| 4 | Enviar `resultado`, `ganada` o `saldo` en el body no sirve de nada. |
+| 5 | Apostar más de lo que se tiene devuelve 409; el saldo no cambia y no queda apuesta guardada. |
+| 6 | Perder todo deja el saldo en 0 (nunca negativo) y la siguiente apuesta da 409. |
+| 7 | Importe 0, negativo, decimal, texto, elección inválida o por encima de `apuesta_max` devuelven 400. |
+| 8 | Juego inexistente devuelve 404, y sin token devuelve 401 al apostar, listar y borrar. |
+| 9 | El listado solo trae mis apuestas (no las de otros), la más reciente primero y paginado. |
+| 10 | `GET /juegos/:id` trae solo mis 5 últimas apuestas de ese juego, en orden. |
+| 11 | Borrar mi apuesta devuelve 204, desaparece y el saldo queda igual. |
+| 12 | La apuesta de otro jugador no se puede borrar (404) y sigue existiendo. |
+| 13 | Un juego con apuestas no se puede borrar (409). |
 
-## 6. Decisiones que tomé
+## 6. Decisiones del proyecto
 
-- **Admin por `ADMIN_EMAIL`:** es la forma más simple de tener un admin sin hacer un script aparte. En un sistema real habría que protegerlo mejor, porque quien registre antes ese email sería admin.
-- **Borrar una apuesta no devuelve el saldo:** si lo devolviera, bastaría con borrar las apuestas perdidas para recuperar el dinero.
-- **404 en vez de 403 con las apuestas de otros:** así no se revela que existen.
-- **El saldo está protegido dos veces:** se comprueba en el código y además la tabla tiene `CHECK (saldo >= 0)`.
-- **Transacción al apostar:** guardar la apuesta y cambiar el saldo es una sola operación. Si falla una de las dos, se deshace todo.
+- **Administrador por `ADMIN_EMAIL`**: es la forma más simple de tener un admin sin scripts. En un sistema real habría que protegerlo mejor, porque quien se registre antes con ese email sería admin.
+- **Borrar una apuesta no devuelve saldo**: si lo hiciera, bastaría con borrar las apuestas perdidas para recuperar el dinero.
+- **404 en vez de 403** para las apuestas de otros: así no se revela que existen.
+- **El saldo está protegido dos veces**: con una comprobación en el código y con `CHECK (saldo >= 0)` en la tabla.
+- **Transacción al apostar**: guardar la apuesta y cambiar el saldo son una sola operación; si falla una, se deshace todo.
+- **Lo que no incluye**: ranking, movimientos, regalo de saldo, otros juegos y frontend.
