@@ -1,7 +1,7 @@
 // Recurso principal: juegos. Todos los usuarios con sesión pueden verlos; solo el admin los gestiona.
 const express = require('express');
 const { autenticar, soloAdmin } = require('./auth');
-const { leerPagina, leerId } = require('./util');
+const { leerPagina, leerId, apuestaJSON } = require('./util');
 
 // Valida el body. Con completo=true el nombre es obligatorio (crear); si no, solo se valida lo que llegue (modificar).
 // Devuelve { datos } con los campos ya limpios, o { error }.
@@ -58,8 +58,11 @@ function rutasJuegos(bd) {
   router.get('/juegos/:id', (req, res) => {
     const juego = buscar(leerId(req.params.id));
     if (!juego) return res.status(404).json({ error: 'Juego no encontrado' });
-    // Las apuestas llegan en la iteración 3; el campo ya existe para no cambiar el formato después.
-    res.json({ ...juego, ultimasApuestas: [] });
+    // Recurso relacionado: mis 5 últimas apuestas en este juego (nunca las de otros jugadores).
+    const ultimas = bd
+      .prepare('SELECT * FROM apuestas WHERE juego_id = ? AND usuario_id = ? ORDER BY id DESC LIMIT 5')
+      .all(juego.id, req.usuario.id);
+    res.json({ ...juego, ultimasApuestas: ultimas.map(apuestaJSON) });
   });
 
   router.post('/juegos', soloAdmin, (req, res) => {
@@ -96,6 +99,10 @@ function rutasJuegos(bd) {
   router.delete('/juegos/:id', soloAdmin, (req, res) => {
     const juego = buscar(leerId(req.params.id));
     if (!juego) return res.status(404).json({ error: 'Juego no encontrado' });
+    // Si alguien ya apostó, se conserva el juego para no perder su historial.
+    if (bd.prepare('SELECT 1 FROM apuestas WHERE juego_id = ?').get(juego.id)) {
+      return res.status(409).json({ error: 'El juego tiene apuestas y no se puede borrar' });
+    }
     bd.prepare('DELETE FROM juegos WHERE id = ?').run(juego.id);
     res.status(204).end();
   });

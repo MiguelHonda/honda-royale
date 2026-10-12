@@ -14,4 +14,7 @@ function leerId(texto) {
   return /^\d+$/.test(texto) ? Number(texto) : null;
 }
 
-module.exports = { leerPagina, leerId };
+// SQLite guarda "ganada" como 0/1; al cliente le enviamos un booleano.
+const apuestaJSON = (a) => ({ ...a, ganada: a.ganada === 1 });
+
+module.exports = { leerPagina, leerId, apuestaJSON };

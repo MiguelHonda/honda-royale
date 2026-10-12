@@ -27,5 +27,5 @@ El saldo nunca puede quedar negativo. Cada jugador solo ve y borra sus propias a
 - **CA3.9** `GET /juegos/:id/apuestas` lista solo mis apuestas (no las de otros), paginadas y con `total`.
 - **CA3.10** `GET /juegos/:id` incluye `ultimasApuestas`: mis últimas 5 apuestas de ese juego, la más reciente primero.
 - **CA3.11** `DELETE` de una apuesta mía → `204`; desaparece del listado y **el saldo no cambia**.
-- **CA3.12** `DELETE` (o intento de ver) de la apuesta de otro jugador → `404`, y la apuesta sigue existiendo.
+- **CA3.12** `DELETE` de la apuesta de otro jugador → `404` y la apuesta sigue existiendo; esa apuesta tampoco aparece en mi listado.
 - **CA3.13** Borrar un juego que ya tiene apuestas → `409`.

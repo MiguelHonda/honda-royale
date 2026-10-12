@@ -23,6 +23,17 @@ function abrirBD(ruta = process.env.BD_RUTA || 'datos.sqlite') {
       descripcion TEXT NOT NULL DEFAULT '',
       apuesta_max INTEGER NOT NULL DEFAULT 100 CHECK (apuesta_max >= 1)
     );
+
+    CREATE TABLE IF NOT EXISTS apuestas (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+      juego_id   INTEGER NOT NULL REFERENCES juegos(id),
+      importe    INTEGER NOT NULL CHECK (importe >= 1),
+      eleccion   TEXT NOT NULL CHECK (eleccion IN ('cara', 'cruz')),
+      resultado  TEXT NOT NULL CHECK (resultado IN ('cara', 'cruz')),
+      ganada     INTEGER NOT NULL,
+      creada     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
   return bd;
 }
