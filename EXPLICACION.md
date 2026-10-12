@@ -1,37 +1,100 @@
-# Honda Royale mínimo · Explicación
+# Honda Royale · Explicación
 
-Backend (solo API, sin pantallas) de un casino con saldo virtual. Se pueden registrar usuarios, hacer login,
-ver juegos y apostar a cara o cruz. Todo se guarda en una base de datos SQLite.
+Honda Royale es el backend de un casino con saldo virtual (no se usa dinero real). Es solo una API: no tiene pantallas,
+se usa con peticiones HTTP. Con ella se pueden registrar usuarios, hacer login, ver juegos y apostar a cara o cruz.
+Todo se guarda en una base de datos SQLite.
 
-## 1. Cómo ejecutarlo
+En este documento explico cómo ponerlo en marcha, cómo se usa y cómo está hecho por dentro.
+
+## 1. Cómo ponerlo en marcha
+
+Hace falta tener instalado **Node 22.13 o superior** (el módulo `node:sqlite` viene incluido, no hay que instalar ninguna base de datos).
 
 ```bash
-npm install
-npm test        # 38 pruebas, no necesita configuración
-npm start       # http://localhost:3000 (crea el fichero datos.sqlite la primera vez)
+npm install     # instala las dependencias
+npm test        # ejecuta las 38 pruebas, no necesita configuración
+npm start       # arranca el servidor en http://localhost:3000
 ```
 
-Variables opcionales: `PORT` (3000), `JWT_SECRET` (secreto del token), `ADMIN_EMAIL` (por defecto `admin@casino.es`) y `BD_RUTA` (por defecto `datos.sqlite`).
+La primera vez que se arranca se crea el fichero `datos.sqlite` con las tablas vacías. Si se borra ese fichero, se empieza de cero.
 
-Ejemplo a mano con `curl`:
+Variables de entorno opcionales:
+
+| Variable | Para qué sirve | Valor por defecto |
+|---|---|---|
+| `PORT` | Puerto del servidor | `3000` |
+| `JWT_SECRET` | Secreto con el que se firman los tokens. En un uso real hay que cambiarlo | un valor de desarrollo |
+| `ADMIN_EMAIL` | Email que al registrarse recibe el rol administrador | `admin@casino.es` |
+| `BD_RUTA` | Fichero de la base de datos | `datos.sqlite` |
+
+Ejemplo: `PORT=4000 ADMIN_EMAIL=jefe@correo.es npm start`.
+
+## 2. Cómo se usa
+
+### Rutas
+
+| Ruta | Quién puede | Para qué |
+|---|---|---|
+| `POST /auth/register` | cualquiera | Registrarse (`email`, `nombre`, `password`) |
+| `POST /auth/login` | cualquiera | Iniciar sesión, devuelve un `token` |
+| `GET /usuarios/me` | con token | Ver mi perfil y mi saldo |
+| `PATCH /usuarios/me` | con token | Cambiar mi nombre y/o mi contraseña |
+| `GET /juegos` | con token | Listar juegos (`?q=` busca por texto, `?pagina=` y `?limite=` paginan) |
+| `GET /juegos/:id` | con token | Ver un juego con mis últimas apuestas |
+| `POST /juegos` | admin | Crear un juego |
+| `PATCH /juegos/:id` | admin | Modificar un juego |
+| `DELETE /juegos/:id` | admin | Borrar un juego (si no tiene apuestas) |
+| `POST /juegos/:id/apuestas` | con token | Apostar (`importe` y `eleccion`: `cara` o `cruz`) |
+| `GET /juegos/:id/apuestas` | con token | Ver mis apuestas de ese juego |
+| `DELETE /juegos/:id/apuestas/:apuestaId` | con token | Borrar una apuesta mía del historial |
+
+Las rutas "con token" necesitan la cabecera `Authorization: Bearer <token>`. El token se consigue haciendo login.
+
+### Ejemplo paso a paso con `curl`
+
+Con el servidor arrancado:
 
 ```bash
-# 1. Registrarse (el email admin@casino.es se registra como administrador)
+# 1. Registrarse. El email admin@casino.es se registra como administrador.
 curl -X POST localhost:3000/auth/register -H 'Content-Type: application/json' \
      -d '{"email":"admin@casino.es","nombre":"Jefe","password":"clave-123"}'
 
-# 2. Login: devuelve {"token":"..."}
+# 2. Hacer login. Devuelve {"token":"..."}; hay que copiar el token.
 curl -X POST localhost:3000/auth/login -H 'Content-Type: application/json' \
      -d '{"email":"admin@casino.es","password":"clave-123"}'
 
-# 3. Usar el token en el resto de peticiones
+# 3. Usar el token en el resto de peticiones.
+TOKEN=pega-aquí-el-token
+
+# Crear un juego (solo admin)
 curl -X POST localhost:3000/juegos -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
      -d '{"nombre":"Mesa 1","apuesta_max":50}'
+
+# Apostar 10 fichas a cara en el juego 1
 curl -X POST localhost:3000/juegos/1/apuestas -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
      -d '{"importe":10,"eleccion":"cara"}'
 ```
 
-## 2. Qué hace cada archivo
+Cada usuario nuevo empieza con 100 fichas. Si acierta gana lo que apuesta y si falla lo pierde. El saldo nunca baja de 0.
+
+### Cómo se consigue un administrador
+
+No hay una pantalla para crear admins. El usuario que se registra con el email de `ADMIN_EMAIL` (por defecto `admin@casino.es`) recibe el rol `admin`.
+Cualquier otro email se registra como `jugador`.
+
+### Errores
+
+Todos los errores tienen el formato `{ "error": "mensaje" }` y un código HTTP:
+
+| Código | Cuándo |
+|---|---|
+| 400 | Datos mal enviados (campos que faltan, formatos no válidos…) |
+| 401 | No hay token, o es inválido o ha caducado |
+| 403 | Hay sesión pero no hay permiso (por ejemplo un jugador intentando crear un juego) |
+| 404 | No existe lo que se pide |
+| 409 | Choca con el estado actual (email repetido, saldo insuficiente, borrar un juego con apuestas) |
+
+## 3. Qué hace cada archivo
 
 | Archivo | Qué hace |
 |---|---|
@@ -46,7 +109,10 @@ curl -X POST localhost:3000/juegos/1/apuestas -H 'Content-Type: application/json
 | `test/*.test.js` | Un archivo de pruebas por iteración. |
 | `docs/` | Documentación SDD: `SPEC.md`, `PLAN.md` y `RESULTADOS.md` de cada iteración. |
 
-## 3. El recorrido de una petición
+El proyecto se hizo en tres iteraciones: primero usuarios (todo lo demás necesita saber quién eres), después juegos (el recurso principal)
+y por último apuestas (que dependen de usuarios y de juegos).
+
+## 4. El recorrido de una petición
 
 Ejemplo: `POST /juegos/1/apuestas` con el body `{"importe": 10, "eleccion": "cara"}` y la cabecera `Authorization: Bearer <token>`.
 
@@ -77,7 +143,7 @@ No hay capas separadas: la ruta recibe la petición, comprueba los datos, aplica
 
 Los errores siguen siempre este orden: 401 (no sé quién eres), 403 (no tienes permiso), 404 (no existe), 400 (datos mal) y 409 (choca con el estado actual, por ejemplo saldo insuficiente).
 
-## 4. Cómo funciona el JWT
+## 5. Cómo funciona el JWT
 
 Un JWT es un texto con tres partes separadas por puntos: `cabecera.contenido.firma`. El contenido va codificado, no cifrado:
 cualquiera puede leerlo, pero nadie puede cambiarlo sin que la firma deje de ser válida.
@@ -93,7 +159,7 @@ cualquiera puede leerlo, pero nadie puede cambiarlo sin que la firma deje de ser
 
 La contraseña no va en el token ni se guarda en claro: se guarda el hash de `bcryptjs`, y en el login `bcrypt.compare` la verifica contra ese hash.
 
-## 5. Qué prueba cada test
+## 6. Qué prueba cada test
 
 Cada prueba empieza por "criterio N", que es el número de la lista de criterios del `SPEC.md` de su iteración.
 Cada prueba crea su propia base de datos en memoria, así que no se afectan entre sí.
@@ -153,7 +219,7 @@ En estas pruebas el azar está controlado: con `0.1` sale cara y con `0.9` sale 
 | 12 | La apuesta de otro jugador no se puede borrar (404) y sigue existiendo. |
 | 13 | Un juego con apuestas no se puede borrar (409). |
 
-## 6. Decisiones del proyecto
+## 7. Decisiones que tomé
 
 - **Administrador por `ADMIN_EMAIL`**: es la forma más simple de tener un admin sin scripts. En un sistema real habría que protegerlo mejor, porque quien se registre antes con ese email sería admin.
 - **Borrar una apuesta no devuelve saldo**: si lo hiciera, bastaría con borrar las apuestas perdidas para recuperar el dinero.
