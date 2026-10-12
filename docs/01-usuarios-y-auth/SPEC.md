@@ -2,30 +2,30 @@
 
 ## Qué debe hacer
 
-Un visitante puede registrarse, iniciar sesión y recibir un token JWT. Con ese token consulta y edita **su propio** perfil.
+Una persona puede registrarse, iniciar sesión y recibir un token JWT. Con ese token consulta y edita su propio perfil.
 Cada usuario nuevo empieza con 100 fichas de saldo.
 
-## Endpoints
+## Rutas
 
-| Método y ruta | Quién | Descripción |
+| Ruta | Quién | Descripción |
 |---|---|---|
-| `POST /auth/register` | público | Crea usuario. Body: `email`, `nombre`, `password` |
-| `POST /auth/login` | público | Devuelve `{ token }`. Body: `email`, `password` |
-| `GET /usuarios/me` | con token | Mi perfil |
+| `POST /auth/register` | cualquiera | Crea el usuario. Body: `email`, `nombre`, `password` |
+| `POST /auth/login` | cualquiera | Devuelve `{ token }`. Body: `email`, `password` |
+| `GET /usuarios/me` | con token | Devuelve mi perfil |
 | `PATCH /usuarios/me` | con token | Cambia mi `nombre` y/o mi `password` |
 
-## Criterios de aceptación
+## Criterios
 
-- **CA1.1** Registro válido → `201` y el perfil (`id`, `email`, `nombre`, `rol: "jugador"`, `saldo: 100`). La respuesta no contiene la contraseña.
-- **CA1.2** Registro con datos inválidos (email sin formato, nombre vacío, contraseña de menos de 6 caracteres, JSON mal formado) → `400`.
-- **CA1.3** Registro con un email ya registrado → `409` (sin distinguir mayúsculas).
-- **CA1.4** La contraseña se guarda cifrada con bcrypt, nunca en claro.
-- **CA1.5** Login correcto → `200` con un token JWT generado por el servidor.
-- **CA1.6** Login con contraseña incorrecta o email inexistente → `401` (el mismo mensaje en ambos casos).
-- **CA1.7** `GET /usuarios/me` con `Authorization: Bearer <token>` → `200` con mi perfil.
-- **CA1.8** Sin cabecera, con token mal formado o con firma falsa → `401`.
-- **CA1.9** `PATCH /usuarios/me` con `nombre` → `200` y el cambio queda guardado.
-- **CA1.10** `PATCH /usuarios/me` con `password` → la nueva contraseña sirve para login y la antigua da `401`.
-- **CA1.11** `PATCH /usuarios/me` vacío o con datos inválidos → `400`. Enviar `rol`, `saldo` o `email` no tiene ningún efecto.
-- **CA1.12** El email configurado como administrador (`ADMIN_EMAIL`, por defecto `admin@casino.es`) obtiene `rol: "admin"` al registrarse.
-- **CA1.13** Los datos persisten en un fichero SQLite: al reabrir la base, el usuario sigue existiendo.
+1. **Registro válido.** Devuelve `201` con el perfil (`id`, `email`, `nombre`, `rol: "jugador"`, `saldo: 100`). La respuesta no incluye la contraseña.
+2. **Registro con datos inválidos.** Email sin formato, nombre vacío, contraseña de menos de 6 caracteres o JSON mal formado devuelven `400`.
+3. **Email repetido.** Registrar un email que ya existe devuelve `409`, sin distinguir mayúsculas.
+4. **Contraseña cifrada.** Se guarda con bcrypt, nunca en claro.
+5. **Login correcto.** Devuelve `200` con un token JWT creado por el servidor.
+6. **Login incorrecto.** Contraseña errónea o email que no existe devuelven `401`, con el mismo mensaje en los dos casos.
+7. **Ver mi perfil.** `GET /usuarios/me` con `Authorization: Bearer <token>` devuelve `200` con mi perfil.
+8. **Token no válido.** Sin cabecera, con un token mal formado o con firma falsa devuelve `401`.
+9. **Cambiar el nombre.** `PATCH /usuarios/me` con `nombre` devuelve `200` y el cambio queda guardado.
+10. **Cambiar la contraseña.** Con `password` nueva, el login funciona con la nueva y la antigua da `401`.
+11. **PATCH inválido.** Un PATCH vacío o con datos inválidos devuelve `400`. Enviar `rol`, `saldo` o `email` no cambia nada.
+12. **Administrador.** El email configurado como admin (`ADMIN_EMAIL`, por defecto `admin@casino.es`) se registra con `rol: "admin"`.
+13. **Persistencia.** Los datos se guardan en un fichero SQLite: al volver a abrir la base el usuario sigue existiendo.

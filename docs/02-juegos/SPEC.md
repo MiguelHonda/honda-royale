@@ -3,29 +3,29 @@
 ## Qué debe hacer
 
 Los juegos son el recurso principal. Cualquier usuario con sesión puede listarlos (con búsqueda y paginación) y ver uno.
-Solo un administrador puede crear, modificar y borrar. Un juego es una mesa de "cara o cruz" con un nombre, una descripción y una apuesta máxima.
+Solo un administrador puede crear, modificar y borrar. Un juego es una mesa de "cara o cruz" con nombre, descripción y apuesta máxima.
 
-## Endpoints (todos exigen token)
+## Rutas (todas necesitan token)
 
-| Método y ruta | Quién | Descripción |
+| Ruta | Quién | Descripción |
 |---|---|---|
-| `GET /juegos?q=&pagina=&limite=` | cualquier usuario | Listado con búsqueda de texto y paginación |
-| `GET /juegos/:id` | cualquier usuario | Un juego, con `ultimasApuestas` |
-| `POST /juegos` | admin | Crea. Body: `nombre`, `descripcion?`, `apuesta_max?` (por defecto 100) |
+| `GET /juegos?q=&pagina=&limite=` | cualquier usuario | Lista de juegos con búsqueda y paginación |
+| `GET /juegos/:id` | cualquier usuario | Un juego, con sus `ultimasApuestas` |
+| `POST /juegos` | admin | Crea un juego. Body: `nombre`, `descripcion` (opcional), `apuesta_max` (opcional, por defecto 100) |
 | `PATCH /juegos/:id` | admin | Modifica uno o varios campos |
-| `DELETE /juegos/:id` | admin | Borra |
+| `DELETE /juegos/:id` | admin | Borra el juego |
 
-## Criterios de aceptación
+## Criterios
 
-- **CA2.1** El admin crea un juego → `201` con `id`, `nombre`, `descripcion` y `apuesta_max`.
-- **CA2.2** Un jugador que intenta crear, modificar o borrar → `403`.
-- **CA2.3** Sin token, cualquier ruta de `/juegos` → `401`.
-- **CA2.4** Crear con datos inválidos (nombre vacío, `apuesta_max` que no sea entero positivo) → `400`.
-- **CA2.5** Crear o modificar con un nombre que ya usa otro juego → `409`.
-- **CA2.6** `GET /juegos/:id` → `200` con el juego y un campo `ultimasApuestas` (lista; en esta iteración siempre vacía, se llena en la 3).
-- **CA2.7** `id` inexistente (o no numérico) en `GET`, `PATCH` o `DELETE` → `404`.
-- **CA2.8** `GET /juegos` devuelve `{ datos, pagina, limite, total }`; por defecto página 1 y límite 10, ordenado por id.
-- **CA2.9** `?q=texto` filtra por nombre o descripción sin distinguir mayúsculas; `total` cuenta solo los que coinciden.
-- **CA2.10** `pagina` o `limite` inválidos (0, negativos, texto, `limite` > 50) → `400`.
-- **CA2.11** `PATCH` parcial del admin → `200` y solo cambia lo enviado; un `PATCH` vacío → `400`.
-- **CA2.12** `DELETE` del admin → `204`, y después el juego da `404`.
+1. **Crear.** El admin crea un juego y recibe `201` con `id`, `nombre`, `descripcion` y `apuesta_max`.
+2. **Permisos.** Un jugador que intenta crear, modificar o borrar recibe `403`.
+3. **Sin sesión.** Sin token, cualquier ruta de `/juegos` devuelve `401`.
+4. **Datos inválidos.** Crear con nombre vacío o con `apuesta_max` que no sea un entero positivo devuelve `400`.
+5. **Nombre repetido.** Crear o modificar un juego con un nombre que ya usa otro devuelve `409`.
+6. **Ver un juego.** `GET /juegos/:id` devuelve `200` con el juego y el campo `ultimasApuestas` (una lista; en esta iteración siempre está vacía y se rellena en la 3).
+7. **No existe.** Un id inexistente o no numérico devuelve `404` en GET, PATCH y DELETE.
+8. **Paginación.** `GET /juegos` devuelve `{ datos, pagina, limite, total }`. Por defecto página 1 y límite 10, ordenado por id.
+9. **Búsqueda.** `?q=texto` filtra por nombre o descripción sin distinguir mayúsculas, y `total` cuenta solo los que coinciden.
+10. **Paginación inválida.** `pagina` o `limite` no válidos (0, negativos, texto, `limite` mayor que 50) devuelven `400`.
+11. **Modificar.** Un PATCH del admin devuelve `200` y solo cambia lo que se envía. Un PATCH vacío devuelve `400`.
+12. **Borrar.** El admin borra con `204` y después el juego devuelve `404`.
