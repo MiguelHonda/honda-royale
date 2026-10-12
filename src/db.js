@@ -16,6 +16,13 @@ function abrirBD(ruta = process.env.BD_RUTA || 'datos.sqlite') {
       rol           TEXT NOT NULL DEFAULT 'jugador',
       saldo         INTEGER NOT NULL DEFAULT 100 CHECK (saldo >= 0)
     );
+
+    CREATE TABLE IF NOT EXISTS juegos (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre      TEXT NOT NULL UNIQUE,
+      descripcion TEXT NOT NULL DEFAULT '',
+      apuesta_max INTEGER NOT NULL DEFAULT 100 CHECK (apuesta_max >= 1)
+    );
   `);
   return bd;
 }

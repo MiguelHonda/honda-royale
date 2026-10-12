@@ -3,6 +3,7 @@
 const express = require('express');
 const { abrirBD } = require('./db');
 const { rutasUsuarios } = require('./usuarios');
+const { rutasJuegos } = require('./juegos');
 
 // Las opciones permiten a las pruebas inyectar una base en memoria y un "azar" controlado.
 function crearApp({
@@ -14,6 +15,7 @@ function crearApp({
   app.use(express.json());
 
   app.use(rutasUsuarios(bd, adminEmail));
+  app.use(rutasJuegos(bd));
 
   // Si ninguna ruta respondió: 404.
   app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
